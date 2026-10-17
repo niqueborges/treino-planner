@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+data/metadata/*.sqlite3
+data/metadata/*.sqlite3-shm
+data/metadata/*.sqlite3-wal
+*.zip
+*.gif
+dataset/
