@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from .exercise_names import display_name_from_filename
+
 class WorkoutError(ValueError):
     pass
 
@@ -31,6 +33,7 @@ def _plan(conn: sqlite3.Connection, plan_id: int, user_id: int) -> dict:
         ).fetchall()
         for exercise in exercises:
             exercise_data = dict(exercise)
+            exercise_data["display_name"] = display_name_from_filename(exercise_data["display_name"])
             exercise_data["sets"] = [dict(row) for row in conn.execute(
                 "SELECT * FROM workout_set WHERE workout_exercise_id=? ORDER BY set_number",
                 (exercise["id"],),

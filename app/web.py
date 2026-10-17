@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .db import DEFAULT_DB, ROOT, connect
+from .exercise_names import display_name_from_filename
 from . import workouts
 from . import users as app_users
 
@@ -193,7 +194,10 @@ class LibraryHandler(SimpleHTTPRequestHandler):
             ).fetchall()
         finally:
             conn.close()
-        self._json({"items": [dict(row) for row in rows], "page": page,
+        items = [dict(row) for row in rows]
+        for item in items:
+            item["display_name"] = display_name_from_filename(item["display_name"])
+        self._json({"items": items, "page": page,
                     "page_size": page_size, "total": total,
                     "pages": (total + page_size - 1) // page_size})
 
