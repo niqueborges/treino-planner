@@ -1,17 +1,98 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sqlite3
 import unicodedata
 import zipfile
+import zlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urlparse
 
 from .db import DEFAULT_DB, ROOT, connect
 from .exercise_names import display_name_from_filename
 from . import workouts
 from . import users as app_users
+
+
+def _safe_dataset_path(root: Path, path_raw: str) -> Path | None:
+    try:
+        resolved_root = root.expanduser().resolve(strict=True)
+        relative = PurePosixPath(path_raw.replace("\\", "/"))
+        if relative.is_absolute() or any(part in (".", "..") for part in relative.parts):
+            return None
+        candidate = resolved_root.joinpath(*relative.parts).resolve(strict=True)
+        candidate.relative_to(resolved_root)
+        return candidate if candidate.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _dataset_candidates(root: Path, path_raw: str) -> list[Path]:
+    candidates: list[Path] = []
+    direct = _safe_dataset_path(root, path_raw)
+    if direct is not None:
+        candidates.append(direct)
+
+    parts = PurePosixPath(path_raw.replace("\\", "/")).parts
+    if (len(parts) == 4 and parts[0] == "GIFS PLANEJADOR - ORGANIZADOS"
+            and parts[1:3] == ("FEMININO", "FUNCIONAL")):
+        filename = parts[3]
+        first = filename[:1]
+        if first.isascii() and first.isalpha():
+            bucket = first.upper()
+        elif first.isascii() and first.isdigit():
+            bucket = "0-9"
+        else:
+            bucket = ""
+        if bucket:
+            relative = PurePosixPath(parts[0], parts[1], parts[2], "SEM CATEGORIA ORIGINAL", bucket, filename)
+            moved = _safe_dataset_path(root, str(relative))
+            if moved is not None and moved not in candidates:
+                candidates.append(moved)
+    return candidates
+
+
+def _open_verified_file(path: Path, expected_size: int, expected_sha256: str):
+    stream = None
+    try:
+        stream = path.open("rb")
+        if stream.seek(0, os.SEEK_END) != expected_size:
+            stream.close()
+            return None
+        stream.seek(0)
+        digest = hashlib.sha256()
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != expected_sha256:
+            stream.close()
+            return None
+        stream.seek(0)
+        return stream
+    except OSError:
+        if stream is not None:
+            stream.close()
+        return None
+
+
+def _verified_zip_entry(source: sqlite3.Row, expected_size: int, expected_sha256: str) -> bytes | None:
+    try:
+        with zipfile.ZipFile(source["archive_path"]) as archive:
+            entries = archive.infolist()
+            index = source["entry_index"]
+            if index < 0 or index >= len(entries):
+                return None
+            entry = entries[index]
+            if entry.filename != source["path_raw"] or entry.file_size != expected_size:
+                return None
+            data = archive.read(entry)
+            if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_sha256:
+                return None
+            return data
+    except (OSError, EOFError, IndexError, zipfile.BadZipFile, RuntimeError, zlib.error):
+        return None
 
 
 def _normalize_search_term(value: str) -> str:
@@ -52,8 +133,11 @@ def _library_search_terms(search: str) -> list[str]:
 class LibraryHandler(SimpleHTTPRequestHandler):
     server_version = "TreinoPlanner/0.1"
 
-    def __init__(self, *args, db_path: str | Path = DEFAULT_DB, **kwargs):
+    def __init__(self, *args, db_path: str | Path = DEFAULT_DB,
+                 dataset_root: str | Path | None = None, **kwargs):
         self.db_path = Path(db_path)
+        configured_root = dataset_root if dataset_root is not None else os.environ.get("TREINO_PLANNER_DATASET_ROOT")
+        self.dataset_root = Path(configured_root).expanduser() if configured_root else None
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def log_message(self, fmt: str, *args) -> None:
@@ -289,36 +373,65 @@ class LibraryHandler(SimpleHTTPRequestHandler):
         conn = connect(self.db_path)
         try:
             row = conn.execute(
-                "SELECT ma.size_bytes, ma.mime_type, op.path_raw, op.entry_index, sa.archive_path "
-                "FROM media_asset ma JOIN original_path op ON op.id=ma.representative_original_path_id "
-                "JOIN source_archive sa ON sa.id=op.source_archive_id WHERE ma.id=?", (media_id,)
+                "SELECT id AS media_id, size_bytes, sha256, mime_type, representative_original_path_id "
+                "FROM media_asset WHERE id=?", (media_id,)
             ).fetchone()
+            if row is None:
+                sources = []
+            else:
+                sources = conn.execute(
+                    "SELECT DISTINCT op.id AS original_path_id, op.path_raw, op.entry_index, op.size_bytes, sa.archive_path "
+                    "FROM original_path op JOIN source_archive sa ON sa.id=op.source_archive_id "
+                    "LEFT JOIN exercise_media em ON em.original_path_id=op.id "
+                    "WHERE em.media_asset_id=? OR op.id=? "
+                    "ORDER BY CASE WHEN op.id=? THEN 0 ELSE 1 END, op.id",
+                    (media_id, row["representative_original_path_id"], row["representative_original_path_id"]),
+                ).fetchall()
         finally:
             conn.close()
         if row is None:
             self.send_error(404)
             return
+
+        verified_file = None
+        if self.dataset_root is not None:
+            seen: set[Path] = set()
+            for source in sources:
+                for candidate in _dataset_candidates(self.dataset_root, source["path_raw"]):
+                    if candidate in seen:
+                        continue
+                    seen.add(candidate)
+                    verified_file = _open_verified_file(candidate, row["size_bytes"], row["sha256"])
+                    if verified_file is not None:
+                        break
+                if verified_file is not None:
+                    break
+
+        zip_data = None
+        if verified_file is None:
+            for source in sources:
+                zip_data = _verified_zip_entry(source, row["size_bytes"], row["sha256"])
+                if zip_data is not None:
+                    break
+        if verified_file is None and zip_data is None:
+            self.send_error(404, "Media source unavailable or failed integrity validation")
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", row["mime_type"])
+        self.send_header("Content-Length", str(row["size_bytes"]))
+        self.send_header("Cache-Control", "public, max-age=86400, immutable")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
         try:
-            with zipfile.ZipFile(row["archive_path"]) as archive:
-                entry = archive.infolist()[row["entry_index"]]
-                if entry.filename != row["path_raw"]:
-                    raise KeyError("The original ZIP entry no longer matches its imported index")
-                stream = archive.open(entry, "r")
-                self.send_response(200)
-                self.send_header("Content-Type", row["mime_type"])
-                self.send_header("Content-Length", str(row["size_bytes"]))
-                self.send_header("Cache-Control", "public, max-age=86400, immutable")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.end_headers()
-                while chunk := stream.read(1024 * 1024):
-                    self.wfile.write(chunk)
-                stream.close()
-        except (OSError, KeyError, zipfile.BadZipFile) as exc:
-            if not self.wfile.closed:
-                try:
-                    self.send_error(404, f"Media source unavailable: {exc}")
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
+            if verified_file is not None:
+                with verified_file:
+                    while chunk := verified_file.read(1024 * 1024):
+                        self.wfile.write(chunk)
+            else:
+                self.wfile.write(zip_data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 def _local_ips() -> list[str]:
