@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import unicodedata
 import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,6 +12,41 @@ from .db import DEFAULT_DB, ROOT, connect
 from .exercise_names import display_name_from_filename
 from . import workouts
 from . import users as app_users
+
+
+def _normalize_search_term(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.casefold())
+    return " ".join("".join(char for char in normalized if not unicodedata.combining(char)).split())
+
+
+_PORTUGUESE_SEARCH_ALIASES = {
+    "supino": ("bench press",),
+    "agachamento": ("squat",),
+    "puxada": ("lat pulldown",),
+    "remada": ("row",),
+    "rosca biceps": ("biceps curl",),
+    "biceps": ("biceps",),
+    "triceps": ("triceps",),
+    "extensora": ("leg extension",),
+    "flexora": ("leg curl",),
+    "panturrilha": ("calf raise",),
+    "elevacao lateral": ("lateral raise",),
+    "desenvolvimento": ("shoulder press",),
+    "abdominal": ("abdominal", "crunch"),
+    "prancha": ("plank",),
+    "gluteo": ("glute",),
+    "ponte de gluteos": ("glute bridge",),
+}
+
+
+def _library_search_terms(search: str) -> list[str]:
+    """Keep the user query and add only explicitly reviewed exact-term aliases."""
+    terms = [search]
+    aliases = _PORTUGUESE_SEARCH_ALIASES.get(_normalize_search_term(search), ())
+    for alias in aliases:
+        if alias.casefold() not in {term.casefold() for term in terms}:
+            terms.append(alias)
+    return terms
 
 
 class LibraryHandler(SimpleHTTPRequestHandler):
@@ -164,9 +200,13 @@ class LibraryHandler(SimpleHTTPRequestHandler):
             where.append("op.category_path_raw=?")
             params.append(category)
         if search:
-            where.append("(lower(op.basename_raw) LIKE lower(?) OR lower(op.path_raw) LIKE lower(?))")
-            needle = f"%{search}%"
-            params.extend((needle, needle))
+            search_clauses = []
+            for term in _library_search_terms(search):
+                search_clauses.append("(lower(op.basename_raw) LIKE lower(?) OR lower(op.path_raw) LIKE lower(?))")
+                # Filenames commonly separate English words with hyphens/underscores.
+                needle = "%" + "%".join(term.split()) + "%"
+                params.extend((needle, needle))
+            where.append("(" + " OR ".join(search_clauses) + ")")
         where_sql = " AND ".join(where)
         base = """
           FROM exercise_media em
