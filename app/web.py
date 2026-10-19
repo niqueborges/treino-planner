@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urlparse
 
 from .db import DEFAULT_DB, ROOT, connect
-from .exercise_names import display_name_from_filename
+from .exercise_names import DISPLAY_NAME_OVERRIDES, display_name_from_filename, exercise_display_name
 from . import workouts
 from . import users as app_users
 
@@ -127,6 +127,10 @@ def _library_search_terms(search: str) -> list[str]:
     for alias in aliases:
         if alias.casefold() not in {term.casefold() for term in terms}:
             terms.append(alias)
+    normalized_search = _normalize_search_term(search)
+    for original_name, display_name in DISPLAY_NAME_OVERRIDES.items():
+        if normalized_search == _normalize_search_term(display_name):
+            terms.append(original_name)
     return terms
 
 
@@ -304,7 +308,7 @@ class LibraryHandler(SimpleHTTPRequestHandler):
             total = int(conn.execute(f"SELECT COUNT(*) {base} WHERE {where_sql}", params).fetchone()[0])
             rows = conn.execute(
                 f"""SELECT em.id AS occurrence_id, ex.id AS exercise_id,
-                           ex.provisional_name_raw AS display_name,
+                           ex.provisional_name_raw AS original_name,
                            ex.identification_status, ma.id AS media_id, ma.sha256,
                            ma.size_bytes, op.path_raw AS original_path,
                            op.gender_folder_raw AS gender_origin,
@@ -320,7 +324,8 @@ class LibraryHandler(SimpleHTTPRequestHandler):
             conn.close()
         items = [dict(row) for row in rows]
         for item in items:
-            item["display_name"] = display_name_from_filename(item["display_name"])
+            item["original_name"] = display_name_from_filename(item["original_name"])
+            item["display_name"] = exercise_display_name(item["original_name"])
         self._json({"items": items, "page": page,
                     "page_size": page_size, "total": total,
                     "pages": (total + page_size - 1) // page_size})

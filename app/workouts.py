@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from .exercise_names import display_name_from_filename
+from .exercise_names import display_name_from_filename, exercise_display_name
 
 class WorkoutError(ValueError):
     pass
@@ -20,7 +20,7 @@ def _plan(conn: sqlite3.Connection, plan_id: int, user_id: int) -> dict:
         day_data["exercises"] = []
         exercises = conn.execute(
             """SELECT we.id, we.day_id, we.exercise_id, we.position, we.execution_type,
-                      ex.provisional_name_raw AS display_name, ex.identification_status,
+                      ex.provisional_name_raw AS original_name, ex.identification_status,
                       em.id AS occurrence_id, ma.id AS media_id, op.path_raw AS original_path,
                       op.gender_folder_raw AS gender_origin, op.area_folder_raw AS area_origin,
                       op.category_path_raw AS category_origin, sa.archive_name AS source_archive
@@ -33,7 +33,8 @@ def _plan(conn: sqlite3.Connection, plan_id: int, user_id: int) -> dict:
         ).fetchall()
         for exercise in exercises:
             exercise_data = dict(exercise)
-            exercise_data["display_name"] = display_name_from_filename(exercise_data["display_name"])
+            exercise_data["original_name"] = display_name_from_filename(exercise_data["original_name"])
+            exercise_data["display_name"] = exercise_display_name(exercise["original_name"])
             exercise_data["sets"] = [dict(row) for row in conn.execute(
                 "SELECT * FROM workout_set WHERE workout_exercise_id=? ORDER BY set_number",
                 (exercise["id"],),
