@@ -179,6 +179,14 @@ class LibraryHandler(SimpleHTTPRequestHandler):
             except LookupError as exc: self._json({"error": str(exc)}, 404)
             except ValueError as exc: self._json({"error": str(exc)}, 400)
             finally: conn.close()
+        elif parsed.path.startswith("/api/history/"):
+            try: session_id = int(parsed.path.rsplit("/", 1)[-1])
+            except ValueError: self._json({"error": "Execução inválida"}, 400); return
+            conn = connect(self.db_path)
+            try: self._json(workouts.get_session(conn, session_id, self._active_user(conn)))
+            except LookupError as exc: self._json({"error": str(exc)}, 404)
+            except ValueError as exc: self._json({"error": str(exc)}, 400)
+            finally: conn.close()
         elif parsed.path.startswith("/api/media/"):
             self._media(parsed.path.rsplit("/", 1)[-1])
         elif parsed.path == "/api/plans":
@@ -225,7 +233,7 @@ class LibraryHandler(SimpleHTTPRequestHandler):
                     self._json(result, status); return
                 user_id = self._active_user(conn)
                 if path == "/api/workout-sessions" and self.command == "POST":
-                    result = workouts.record_session(conn,user_id,int(body["day_id"]),body["duration_seconds"])
+                    result = workouts.record_session(conn,user_id,int(body["day_id"]),body["duration_seconds"],body.get("execution_snapshot"))
                     self._json(result,201); return
                 if path.startswith("/api/users/") and path.endswith("/reset") and self.command == "POST":
                     target_user = int(path.split("/")[3])

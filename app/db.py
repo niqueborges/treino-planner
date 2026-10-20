@@ -174,6 +174,25 @@ CREATE TABLE IF NOT EXISTS workout_session (
   duration_seconds INTEGER NOT NULL CHECK(duration_seconds >= 0),
   completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS workout_session_exercise (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES workout_session(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL CHECK(position >= 1),
+  workout_exercise_id_snapshot INTEGER,
+  exercise_name_snapshot TEXT NOT NULL,
+  UNIQUE(session_id, position)
+);
+CREATE TABLE IF NOT EXISTS workout_session_set (
+  id INTEGER PRIMARY KEY,
+  session_exercise_id INTEGER NOT NULL REFERENCES workout_session_exercise(id) ON DELETE CASCADE,
+  set_number INTEGER NOT NULL CHECK(set_number >= 1),
+  repetitions INTEGER CHECK(repetitions IS NULL OR repetitions >= 1),
+  load_value REAL CHECK(load_value IS NULL OR load_value >= 0),
+  load_unit TEXT NOT NULL DEFAULT 'kg' CHECK(load_unit IN ('kg','lb','none')),
+  rest_seconds INTEGER NOT NULL DEFAULT 0 CHECK(rest_seconds >= 0),
+  notes TEXT NOT NULL DEFAULT '',
+  UNIQUE(session_exercise_id, set_number)
+);
 CREATE INDEX IF NOT EXISTS idx_original_path_basename ON original_path(basename_raw);
 CREATE INDEX IF NOT EXISTS idx_original_path_source ON original_path(source_archive_id);
 CREATE INDEX IF NOT EXISTS idx_original_path_facets ON original_path(gender_folder_raw, area_folder_raw, category_path_raw);
@@ -196,6 +215,7 @@ def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
     _migrate_users(conn)
+    _migrate_workout_session_snapshot(conn)
     return conn
 
 
@@ -222,3 +242,10 @@ def _migrate_users(conn: sqlite3.Connection) -> None:
         conn.execute("""CREATE TRIGGER IF NOT EXISTS workout_plan_owner_required_update
                         BEFORE UPDATE OF user_id ON workout_plan WHEN NEW.user_id IS NULL
                         BEGIN SELECT RAISE(ABORT, 'workout_plan.user_id is required'); END""")
+
+
+def _migrate_workout_session_snapshot(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(workout_session_exercise)")}
+    if "workout_exercise_id_snapshot" not in columns:
+        with conn:
+            conn.execute("ALTER TABLE workout_session_exercise ADD COLUMN workout_exercise_id_snapshot INTEGER")

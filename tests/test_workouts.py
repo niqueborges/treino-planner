@@ -61,6 +61,34 @@ class WorkoutPlannerTests(unittest.TestCase):
         self.assertEqual(loaded["days"][0]["exercises"][0]["identification_status"], "pending")
         self.assertIsNotNone(loaded["days"][0]["exercises"][0]["media_id"])
 
+    def test_display_translation_keeps_original_and_history_snapshots(self):
+        plan = workouts.create_plan(self.conn, self.user_id, "Nomes")
+        day = plan["days"][0]
+        exercise_id = self.conn.execute("SELECT id FROM exercise ORDER BY id LIMIT 1").fetchone()[0]
+        original_name = "Dumbbell Alternate Shoulder Press (female) Shoulders.gif"
+        self.conn.execute("UPDATE exercise SET provisional_name_raw=? WHERE id=?", (original_name, exercise_id))
+        workout_exercise = workouts.add_exercise(self.conn, self.user_id, day["id"], exercise_id)
+        loaded_day = workouts.get_plan(self.conn, plan["id"], self.user_id)["days"][0]
+        loaded_exercise = loaded_day["exercises"][0]
+        self.assertEqual(loaded_exercise["display_name"], "Desenvolvimento alternado com halteres")
+        self.assertEqual(loaded_exercise["original_name"], "Dumbbell Alternate Shoulder Press (female) Shoulders")
+        self.assertEqual(loaded_exercise["exercise_id"], exercise_id)
+
+        old_session = workouts.record_session(self.conn, self.user_id, day["id"], 60, [{
+            "workout_exercise_id": workout_exercise["id"], "display_name": "Dumbbell Alternate Shoulder Press (female) Shoulders",
+            "sets": [{"repetitions": 12, "rest_seconds": 90}],
+        }])
+        new_session = workouts.record_session(self.conn, self.user_id, day["id"], 60, [{
+            "workout_exercise_id": workout_exercise["id"], "display_name": loaded_exercise["display_name"],
+            "sets": [{"repetitions": 12, "rest_seconds": 90}],
+        }])
+        old_detail = workouts.get_session(self.conn, old_session["id"], self.user_id)
+        new_detail = workouts.get_session(self.conn, new_session["id"], self.user_id)
+        self.assertEqual(old_detail["exercises"][0]["exercise_name_snapshot"], "Dumbbell Alternate Shoulder Press (female) Shoulders")
+        self.assertEqual(new_detail["exercises"][0]["exercise_name_snapshot"], "Desenvolvimento alternado com halteres")
+        self.assertEqual(new_detail["exercises"][0]["workout_exercise_id_snapshot"], workout_exercise["id"])
+        self.assertEqual(self.conn.execute("SELECT provisional_name_raw FROM exercise WHERE id=?", (exercise_id,)).fetchone()[0], original_name)
+
     def test_invalid_reorder_rejected_and_empty_day_is_rest(self):
         plan = workouts.create_plan(self.conn, self.user_id, "Teste")
         day = plan["days"][0]
@@ -90,6 +118,36 @@ class WorkoutPlannerTests(unittest.TestCase):
         self.assertEqual(workouts.list_sessions(self.conn, second_user["id"]), [])
         with self.assertRaises(LookupError):
             workouts.record_session(self.conn, second_user["id"], first_day["id"], 900)
+
+    def test_completed_session_details_are_snapshotted_and_user_scoped(self):
+        plan = workouts.create_plan(self.conn, self.user_id, "Plano original")
+        day = plan["days"][0]
+        exercise_ids = [row[0] for row in self.conn.execute("SELECT id FROM exercise ORDER BY id")]
+        first = workouts.add_exercise(self.conn, self.user_id, day["id"], exercise_ids[0])
+        second = workouts.add_exercise(self.conn, self.user_id, day["id"], exercise_ids[1])
+        snapshot = [
+            {"workout_exercise_id": first["id"], "display_name": "Agachamento realizado", "sets": [{"set_number": 1, "repetitions": 8, "load_value": 20, "load_unit": "kg", "rest_seconds": 60, "notes": "Controlado"}]},
+            {"workout_exercise_id": second["id"], "display_name": "Corrida realizada", "sets": [{"set_number": 1, "repetitions": None, "load_value": None, "load_unit": "none", "rest_seconds": 0, "notes": ""}]},
+        ]
+        session = workouts.record_session(self.conn, self.user_id, day["id"], 900, snapshot)
+        second_session = workouts.record_session(self.conn, self.user_id, day["id"], 240, [
+            {"display_name": "Exercício adicional", "sets": [{"set_number": 1, "repetitions": 10, "load_value": 5, "load_unit": "kg", "rest_seconds": 30, "notes": ""}]}
+        ])
+        workouts.remove_exercise(self.conn, self.user_id, second["id"])
+        workouts.remove_exercise(self.conn, self.user_id, first["id"])
+        workouts.rename_plan(self.conn, self.user_id, plan["id"], "Plano alterado depois")
+
+        detail = workouts.get_session(self.conn, session["id"], self.user_id)
+        self.assertEqual(detail["exercise_count"], 2)
+        self.assertTrue(detail["snapshot_available"])
+        self.assertEqual([item["exercise_name_snapshot"] for item in detail["exercises"]], ["Agachamento realizado", "Corrida realizada"])
+        self.assertEqual(detail["exercises"][0]["sets"][0]["repetitions"], 8)
+        self.assertEqual(detail["exercises"][0]["sets"][0]["load_value"], 20)
+        self.assertEqual(detail["exercises"][0]["workout_exercise_id_snapshot"], first["id"])
+        self.assertEqual(len(workouts.list_sessions(self.conn, self.user_id)), 2)
+        self.assertEqual(workouts.get_session(self.conn, second_session["id"], self.user_id)["exercises"][0]["exercise_name_snapshot"], "Exercício adicional")
+        with self.assertRaises(LookupError):
+            workouts.get_session(self.conn, session["id"], users.create_user(self.conn, "Outra")['id'])
 
     def test_reset_plan_user_and_application_preserves_dataset_library(self):
         other = users.create_user(self.conn, "Outra")

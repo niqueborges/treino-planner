@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 
 from .exercise_names import display_name_from_filename, exercise_display_name
 
@@ -210,7 +211,50 @@ def list_sessions(conn: sqlite3.Connection, user_id: int, limit: int = 100) -> l
     )]
 
 
-def record_session(conn: sqlite3.Connection, user_id: int, day_id: int, duration_seconds: int) -> dict:
+def get_session(conn: sqlite3.Connection, session_id: int, user_id: int) -> dict:
+    row = conn.execute(
+        "SELECT id,user_id,plan_id,workout_day_id,plan_name_snapshot,day_title_snapshot,exercise_count,duration_seconds,completed_at "
+        "FROM workout_session WHERE id=? AND user_id=?", (session_id, user_id)
+    ).fetchone()
+    if row is None:
+        raise LookupError("Execução não encontrada")
+    result = dict(row)
+    result["exercises"] = []
+    for exercise in conn.execute(
+        "SELECT id,position,workout_exercise_id_snapshot,exercise_name_snapshot FROM workout_session_exercise WHERE session_id=? ORDER BY position",
+        (session_id,),
+    ):
+        item = dict(exercise)
+        item["sets"] = [dict(set_row) for set_row in conn.execute(
+            "SELECT set_number,repetitions,load_value,load_unit,rest_seconds,notes "
+            "FROM workout_session_set WHERE session_exercise_id=? ORDER BY set_number", (exercise["id"],)
+        )]
+        result["exercises"].append(item)
+    result["snapshot_available"] = bool(result["exercises"])
+    for exercise in result["exercises"]:
+        exercise.pop("id", None)
+    return result
+
+
+def _snapshot_from_day(conn: sqlite3.Connection, day_id: int) -> list[dict]:
+    snapshot = []
+    for exercise in conn.execute(
+        "SELECT we.id,ex.provisional_name_raw AS original_name FROM workout_exercise we "
+        "JOIN exercise ex ON ex.id=we.exercise_id WHERE we.day_id=? ORDER BY we.position,we.id", (day_id,)
+    ):
+        snapshot.append({
+            "workout_exercise_id": exercise["id"],
+            "display_name": exercise_display_name(exercise["original_name"]),
+            "sets": [dict(row) for row in conn.execute(
+                "SELECT set_number,repetitions,load_value,load_unit,rest_seconds,notes FROM workout_set "
+                "WHERE workout_exercise_id=? ORDER BY set_number", (exercise["id"],)
+            )],
+        })
+    return snapshot
+
+
+def record_session(conn: sqlite3.Connection, user_id: int, day_id: int, duration_seconds: int,
+                   execution_snapshot: list[dict] | None = None) -> dict:
     _owned_day(conn, day_id, user_id)
     try: duration_seconds = int(duration_seconds)
     except (TypeError, ValueError) as exc: raise WorkoutError("Duração inválida") from exc
@@ -224,12 +268,42 @@ def record_session(conn: sqlite3.Connection, user_id: int, day_id: int, duration
            WHERE d.id=? AND p.user_id=? GROUP BY d.id""", (day_id, user_id)
     ).fetchone()
     if row is None: raise LookupError("Dia não encontrado para o usuário selecionado")
-    if row["exercise_count"] == 0: raise WorkoutError("Não é possível registrar um dia sem exercícios")
+    if execution_snapshot is None:
+        execution_snapshot = _snapshot_from_day(conn, day_id)
+    if not isinstance(execution_snapshot, list) or not execution_snapshot:
+        raise WorkoutError("Não é possível registrar um dia sem exercícios")
+    if any(not isinstance(exercise, Mapping) or not str(exercise.get("display_name", "")).strip()
+           or not isinstance(exercise.get("sets"), list) or not exercise["sets"] for exercise in execution_snapshot):
+        raise WorkoutError("Detalhes da execução inválidos")
     with conn:
         cursor = conn.execute(
             """INSERT INTO workout_session(user_id,plan_id,workout_day_id,plan_name_snapshot,
                        day_title_snapshot,exercise_count,duration_seconds)
                VALUES (?,?,?,?,?,?,?)""",
-            (user_id,row["plan_id"],day_id,row["plan_name"],row["day_title"],row["exercise_count"],duration_seconds),
+            (user_id,row["plan_id"],day_id,row["plan_name"],row["day_title"],len(execution_snapshot),duration_seconds),
         )
+        for position, exercise in enumerate(execution_snapshot, 1):
+            exercise_cursor = conn.execute(
+                "INSERT INTO workout_session_exercise(session_id,position,workout_exercise_id_snapshot,exercise_name_snapshot) VALUES (?,?,?,?)",
+                (cursor.lastrowid, position, exercise.get("workout_exercise_id"), str(exercise["display_name"]).strip()),
+            )
+            for set_number, set_data in enumerate(exercise["sets"], 1):
+                if not isinstance(set_data, Mapping):
+                    raise WorkoutError("Detalhes da execução inválidos")
+                try:
+                    repetitions = set_data.get("repetitions")
+                    repetitions = int(repetitions) if repetitions not in (None, "") else None
+                    load_value = set_data.get("load_value")
+                    load_value = float(load_value) if load_value not in (None, "") else None
+                    rest_seconds = max(0, int(set_data.get("rest_seconds", 0) or 0))
+                except (TypeError, ValueError) as exc:
+                    raise WorkoutError("Detalhes da execução inválidos") from exc
+                load_unit = str(set_data.get("load_unit") or "kg")
+                if load_unit not in ("kg", "lb", "none"):
+                    load_unit = "kg"
+                conn.execute(
+                    "INSERT INTO workout_session_set(session_exercise_id,set_number,repetitions,load_value,load_unit,rest_seconds,notes) VALUES (?,?,?,?,?,?,?)",
+                    (exercise_cursor.lastrowid, set_number, repetitions, load_value, load_unit, rest_seconds,
+                     str(set_data.get("notes") or "")),
+                )
     return dict(conn.execute("SELECT * FROM workout_session WHERE id=?", (cursor.lastrowid,)).fetchone())
