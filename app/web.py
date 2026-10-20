@@ -249,6 +249,8 @@ class LibraryHandler(SimpleHTTPRequestHandler):
                     day_id = int(path.split("/")[3]); result = workouts.add_exercise(conn, user_id, day_id, int(body["exercise_id"])); status = 201
                 elif path.startswith("/api/workout-days/") and path.endswith("/reorder") and self.command == "POST":
                     day_id = int(path.split("/")[3]); workouts.reorder_exercises(conn, user_id, day_id, [int(x) for x in body["exercise_ids"]]); result = {"ok": True}; status = 200
+                elif path.startswith("/api/workout-days/") and path.endswith("/duplicate") and self.command == "POST":
+                    result = workouts.duplicate_day(conn, user_id, int(path.split("/")[3]), body.get("target_weekday")); status = 200
                 elif path.startswith("/api/workout-days/") and self.command == "PATCH":
                     workouts.update_day(conn, user_id, int(path.rsplit("/",1)[1]), body.get("title"), body.get("is_rest")); result = {"ok": True}; status = 200
                 elif path.startswith("/api/workout-exercises/") and path.endswith("/sets") and self.command == "POST":

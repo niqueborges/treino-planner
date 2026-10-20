@@ -109,6 +109,38 @@ def update_day(conn: sqlite3.Connection, user_id: int, day_id: int, title: str |
             raise LookupError("Dia não encontrado")
 
 
+def duplicate_day(conn: sqlite3.Connection, user_id: int, source_day_id: int, target_weekday: int) -> dict:
+    _owned_day(conn, source_day_id, user_id)
+    try:
+        target_weekday = int(target_weekday)
+    except (TypeError, ValueError) as exc:
+        raise WorkoutError("Dia de destino inválido") from exc
+    if not 1 <= target_weekday <= 7:
+        raise WorkoutError("Dia de destino inválido")
+    source = conn.execute("SELECT * FROM workout_day WHERE id=?", (source_day_id,)).fetchone()
+    if target_weekday == source["weekday"]:
+        raise WorkoutError("Escolha um dia diferente para o destino")
+    target = conn.execute("SELECT id FROM workout_day WHERE plan_id=? AND weekday=?", (source["plan_id"], target_weekday)).fetchone()
+    if target is None:
+        raise LookupError("Dia de destino não encontrado")
+    target_day_id = target["id"]
+    with conn:
+        conn.execute("DELETE FROM workout_exercise WHERE day_id=?", (target_day_id,))
+        conn.execute("UPDATE workout_day SET title=?,is_rest=? WHERE id=?", (source["title"], source["is_rest"], target_day_id))
+        exercises = conn.execute("SELECT * FROM workout_exercise WHERE day_id=? ORDER BY position,id", (source_day_id,)).fetchall()
+        for exercise in exercises:
+            exercise_cursor = conn.execute(
+                "INSERT INTO workout_exercise(day_id,exercise_id,position,execution_type) VALUES (?,?,?,?)",
+                (target_day_id, exercise["exercise_id"], exercise["position"], exercise["execution_type"]),
+            )
+            conn.execute(
+                "INSERT INTO workout_set(workout_exercise_id,set_number,repetitions,load_value,load_unit,rest_seconds,notes) "
+                "SELECT ?,set_number,repetitions,load_value,load_unit,rest_seconds,notes FROM workout_set WHERE workout_exercise_id=?",
+                (exercise_cursor.lastrowid, exercise["id"]),
+            )
+    return next(day for day in _plan(conn, source["plan_id"], user_id)["days"] if day["id"] == target_day_id)
+
+
 def add_exercise(conn: sqlite3.Connection, user_id: int, day_id: int, exercise_id: int) -> dict:
     with conn:
         _owned_day(conn, day_id, user_id)

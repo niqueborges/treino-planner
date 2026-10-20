@@ -23,7 +23,7 @@ globalThis.__executionRestFlowTestPromise = (async function () {
     }
     throw new Error(`Unclosed function ${name}`);
   }
-  const functions = ['updateActivePlanSet', 'startPlannedWorkout', 'advanceToNextExecutionStep', 'finishRestPeriod', 'skipRestPeriod', 'advanceExecution']
+  const functions = ['updateActivePlanSet', 'startPlannedWorkout', 'beginPlannedExecution', 'advanceToNextExecutionStep', 'finishRestPeriod', 'skipRestPeriod', 'advanceExecution']
     .map(extractFunction).join('\n');
 
   function makeFlow(seconds = [42, 30, 0]) {
@@ -38,6 +38,8 @@ globalThis.__executionRestFlowTestPromise = (async function () {
       executionIndex: 0,
       executionPaused: false, executionPausedDurationMs: 0, executionWeekday: null, restDeadlineAt: 0, restRemainingSeconds: 0,
       restAdvancesExecution: false,
+      executionSnapshot() { return []; },
+      completedWorkoutDayIdsToday: new Set(), completedWorkoutSessionsToday: [], updatePlannerStartButtons() {}, renderDashboardWeek() {},
       executionDayId: 7,
       executionStartedAt: 1000,
       document,
@@ -110,7 +112,7 @@ globalThis.__executionRestFlowTestPromise = (async function () {
     passed += 1;
   }
   {
-    const planFlow = new Function('scope', `with(scope){${functions}; return {updateActivePlanSet,startPlannedWorkout,advanceExecution};}`);
+    const planFlow = new Function('scope', `with(scope){${functions}; return {updateActivePlanSet,startPlannedWorkout,beginPlannedExecution,advanceExecution};}`);
     for (const configuredSeconds of [30, 60, 90]) {
       const starts = [];
       const day = { id: 11, weekday: 1, title: 'Treino', exercises: [{ sets: [
@@ -121,6 +123,7 @@ globalThis.__executionRestFlowTestPromise = (async function () {
       const scope = {
         activePlan: { days: [day] },
         executionSteps: [], executionIndex: 0, executionPaused: false, executionPausedAt: 0, executionPausedDurationMs: 0, executionWeekday: null, restDeadlineAt: 0, restRemainingSeconds: 0, restAdvancesExecution: false,
+        completedWorkoutDayIdsToday: new Set(), completedWorkoutSessionsToday: [], updatePlannerStartButtons() {}, renderDashboardWeek() {},
         executionStartedAt: 1000, executionDayId: null,
         planDay: () => day, dayHasWorkout: value => Boolean(value?.exercises?.length),
         weekdayNames: ['SEGUNDA'], workoutName: () => 'Treino',

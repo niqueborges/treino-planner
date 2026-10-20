@@ -61,6 +61,38 @@ class WorkoutPlannerTests(unittest.TestCase):
         self.assertEqual(loaded["days"][0]["exercises"][0]["identification_status"], "pending")
         self.assertIsNotNone(loaded["days"][0]["exercises"][0]["media_id"])
 
+    def test_duplicate_day_copies_exercises_and_sets_independently(self):
+        plan = workouts.create_plan(self.conn, self.user_id, "Duplicação")
+        monday, thursday = plan["days"][0], plan["days"][3]
+        exercise_ids = [row[0] for row in self.conn.execute("SELECT id FROM exercise ORDER BY id LIMIT 2")]
+        exercise_id, second_exercise_id = exercise_ids
+        source_exercise = workouts.add_exercise(self.conn, self.user_id, monday["id"], exercise_id)
+        second_source_exercise = workouts.add_exercise(self.conn, self.user_id, monday["id"], second_exercise_id)
+        workouts.reorder_exercises(self.conn, self.user_id, monday["id"], [second_source_exercise["id"], source_exercise["id"]])
+        source_sets = self.conn.execute("SELECT id FROM workout_set WHERE workout_exercise_id=? ORDER BY set_number", (source_exercise["id"],)).fetchall()
+        workouts.update_set(self.conn, self.user_id, source_sets[0]["id"], {
+            "repetitions": 8, "load_value": 42.5, "load_unit": "lb", "rest_seconds": 75, "notes": "Pausa controlada",
+        })
+        workouts.update_day(self.conn, self.user_id, monday["id"], title="Treino A", is_rest=False)
+
+        copied = workouts.duplicate_day(self.conn, self.user_id, monday["id"], 4)
+
+        self.assertEqual(copied["id"], thursday["id"])
+        self.assertEqual(copied["title"], "Treino A")
+        self.assertEqual(len(copied["exercises"]), 2)
+        self.assertEqual([item["exercise_id"] for item in copied["exercises"]], [second_exercise_id, exercise_id])
+        copied_exercise = copied["exercises"][1]
+        self.assertNotEqual(copied_exercise["id"], source_exercise["id"])
+        self.assertEqual(len(copied_exercise["sets"]), 3)
+        self.assertEqual({key: copied_exercise["sets"][0][key] for key in ("repetitions", "load_value", "load_unit", "rest_seconds", "notes")}, {
+            "repetitions": 8, "load_value": 42.5, "load_unit": "lb", "rest_seconds": 75, "notes": "Pausa controlada",
+        })
+
+        workouts.update_set(self.conn, self.user_id, copied_exercise["sets"][0]["id"], {"repetitions": 12})
+        reloaded = workouts.get_plan(self.conn, plan["id"], self.user_id)
+        self.assertEqual(reloaded["days"][0]["exercises"][1]["sets"][0]["repetitions"], 8)
+        self.assertEqual(reloaded["days"][3]["exercises"][1]["sets"][0]["repetitions"], 12)
+
     def test_display_translation_keeps_original_and_history_snapshots(self):
         plan = workouts.create_plan(self.conn, self.user_id, "Nomes")
         day = plan["days"][0]
