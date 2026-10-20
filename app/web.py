@@ -134,6 +134,179 @@ def _library_search_terms(search: str) -> list[str]:
     return terms
 
 
+CATEGORY_FOCUS_DEFINITIONS: dict[str, dict[str, object]] = {
+    "costas": {
+        "label": "Costas",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": ("op.category_path_raw LIKE '%/COSTAS'", "op.category_path_raw = 'COSTAS'"),
+    },
+    "peito": {
+        "label": "Peito",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": ("op.category_path_raw LIKE '%/PEITO'", "op.category_path_raw = 'PEITO'"),
+    },
+    "ombros": {
+        "label": "Ombros",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": (
+            "op.category_path_raw LIKE '%/OMBRO'",
+            "op.category_path_raw LIKE '%/OMBROS'",
+            "op.category_path_raw = 'OMBRO'",
+            "op.category_path_raw = 'OMBROS'",
+            "op.category_path_raw LIKE 'MOBILIDADE/OMBRO%'",
+        ),
+    },
+    "perna": {
+        "label": "Perna",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": ("op.category_path_raw LIKE '%/PERNA'", "op.category_path_raw = 'PERNA'"),
+    },
+    "biceps": {
+        "label": "Bíceps",
+        "areas": ("ACADEMIA",),
+        "sql_conditions": ("op.category_path_raw LIKE '%/BICEPS'", "op.category_path_raw = 'BICEPS'"),
+    },
+    "triceps": {
+        "label": "Tríceps",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": ("op.category_path_raw LIKE '%/TRICEPS'", "op.category_path_raw = 'TRICEPS'"),
+    },
+    "abdomen": {
+        "label": "Abdômen",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": ("op.category_path_raw = 'ABDOMINAIS'", "op.category_path_raw LIKE '%/ABDOMINAIS'"),
+    },
+    "antebraco": {
+        "label": "Antebraço",
+        "areas": ("ACADEMIA",),
+        "sql_conditions": (
+            "op.category_path_raw LIKE '%/ANTEBRAÇO'",
+            "op.category_path_raw LIKE '%/ANDEBRAÇO'",
+            "op.category_path_raw = 'ANTEBRAÇO'",
+        ),
+    },
+    "panturrilha": {
+        "label": "Panturrilha",
+        "areas": ("ACADEMIA",),
+        "sql_conditions": (
+            "op.category_path_raw LIKE '%/PANTURRILHA'",
+            "op.category_path_raw LIKE '%/PANTURRILHAS'",
+            "op.category_path_raw = 'PANTURRILHA'",
+            "op.category_path_raw = 'PANTURRILHAS'",
+        ),
+    },
+    "trapezio": {
+        "label": "Trapézio",
+        "areas": ("ACADEMIA",),
+        "sql_conditions": ("op.category_path_raw LIKE '%/TRAPÉZIO'", "op.category_path_raw = 'TRAPÉZIO'"),
+    },
+    "cardio": {
+        "label": "Cardio",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": (
+            "op.category_path_raw = 'CARDIO'",
+            "op.category_path_raw LIKE 'CARDIO/%'",
+            "op.category_path_raw LIKE '%/CARDIO'",
+        ),
+    },
+    "agilidade": {
+        "label": "Agilidade e Coordenação",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'AGILIDADE E COORDENAÇÃO'",),
+    },
+    "alongamento": {
+        "label": "Alongamento",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'ALONGAMENTO'",),
+    },
+    "argolas": {
+        "label": "Argolas",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'ARGOLAS'",),
+    },
+    "ativacao": {
+        "label": "Ativação Neuromuscular",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'ATIVAÇÃO NEUROMUSCULAR'",),
+    },
+    "banco": {
+        "label": "Banco",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'BANCO'",),
+    },
+    "bola-pilates": {
+        "label": "Bola Pilates",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'BOLA PILATES'",),
+    },
+    "bosu": {
+        "label": "Bosu Ball",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'BOSU BALL'",),
+    },
+    "cadeira": {
+        "label": "Cadeira",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'CADEIRA'",),
+    },
+    "caixote": {
+        "label": "Caixote",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'CAIXOTE'",),
+    },
+    "corda-naval": {
+        "label": "Corda Naval",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'CORDA NAVAL'",),
+    },
+    "liberacao": {
+        "label": "Liberação Miofascial",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw LIKE 'LIBERAÇÃO MIOFASCIAL%'",),
+    },
+    "miniband": {
+        "label": "Miniband",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'MINIBAND'",),
+    },
+    "mobilidade": {
+        "label": "Mobilidade",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw LIKE 'MOBILIDADE%'",),
+    },
+    "parede": {
+        "label": "Parede",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'PAREDE'",),
+    },
+    "peso-corporal": {
+        "label": "Peso Corporal",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw LIKE 'PESO CORPORAL%'",),
+    },
+    "pliometria": {
+        "label": "Pliometria",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'PLIOMETRIA'",),
+    },
+    "superband": {
+        "label": "Superband",
+        "areas": ("ACADEMIA", "FUNCIONAL"),
+        "sql_conditions": ("op.category_path_raw LIKE 'SUPERBAND%'",),
+    },
+    "trx": {
+        "label": "TRX",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'TRX'",),
+    },
+    "yoga": {
+        "label": "Yoga",
+        "areas": ("FUNCIONAL",),
+        "sql_conditions": ("op.category_path_raw = 'YOGA'",),
+    },
+}
+
+
 class LibraryHandler(SimpleHTTPRequestHandler):
     server_version = "TreinoPlanner/0.1"
 
@@ -295,8 +468,13 @@ class LibraryHandler(SimpleHTTPRequestHandler):
         if category == "__direct__":
             where.append("op.category_path_raw=''")
         elif category:
-            where.append("op.category_path_raw=?")
-            params.append(category)
+            cat_key = category.strip().lower()
+            if cat_key in CATEGORY_FOCUS_DEFINITIONS:
+                clauses = CATEGORY_FOCUS_DEFINITIONS[cat_key]["sql_conditions"]
+                where.append("(" + " OR ".join(clauses) + ")")
+            else:
+                where.append("op.category_path_raw=?")
+                params.append(category)
         if search:
             search_clauses = []
             for term in _library_search_terms(search):
@@ -362,9 +540,16 @@ class LibraryHandler(SimpleHTTPRequestHandler):
             categories = [r[0] for r in conn.execute(
                 f"SELECT DISTINCT category_path_raw FROM original_path op WHERE {where} "
                 "ORDER BY category_path_raw", params)]
+
+            groups = [
+                {"id": key, "name": str(defn["label"])}
+                for key, defn in CATEGORY_FOCUS_DEFINITIONS.items()
+                if not area or area in defn["areas"]
+            ]
+            groups.sort(key=lambda item: unicodedata.normalize("NFKD", item["name"].casefold()))
         finally:
             conn.close()
-        self._json({"genders": genders, "areas": areas, "categories": categories})
+        self._json({"genders": genders, "areas": areas, "categories": categories, "groups": groups})
 
     def _summary(self) -> None:
         conn = connect(self.db_path)

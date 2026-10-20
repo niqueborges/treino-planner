@@ -107,5 +107,101 @@ class LibrarySearchAliasTests(unittest.TestCase):
         self.assertEqual(len(result["items"]), 2)
 
 
+class LibraryFacetsAndCategoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.db_path = self.root / "library.sqlite3"
+        archive_path = self.root / "categorized.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            entries = (
+                ("Dataset/MASCULINO/ACADEMIA/EXERCÍCIOS COM BARRAS/COSTAS/Barbell-Row.gif", b"gif1"),
+                ("Dataset/MASCULINO/ACADEMIA/EXERCÍCIOS COM HALTERES/COSTAS/Dumbbell-Row.gif", b"gif2"),
+                ("Dataset/MASCULINO/ACADEMIA/EXERCÍCIOS COM BARRAS/PEITO/Bench-Press.gif", b"gif3"),
+                ("Dataset/MASCULINO/ACADEMIA/EXERCÍCIOS COM BARRAS/PERNA/Barbell-Squat.gif", b"gif4"),
+                ("Dataset/MASCULINO/ACADEMIA/CARDIO/Treadmill-Run.gif", b"gif5"),
+                ("Dataset/FEMININO/FUNCIONAL/ABDOMINAIS/Crunch.gif", b"gif6"),
+                ("Dataset/FEMININO/FUNCIONAL/PESO CORPORAL/COSTAS/Inverted-Row.gif", b"gif7"),
+                ("Dataset/FEMININO/FUNCIONAL/TRX/TRX-Chest-Press.gif", b"gif8"),
+            )
+            for path, data in entries:
+                archive.writestr(path, data)
+        import_dataset([archive_path], self.db_path)
+
+        handler = partial(LibraryHandler, db_path=self.db_path)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.temp.cleanup()
+
+    def get_json(self, path: str, **params: object) -> dict:
+        query_str = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        url = f"{self.base_url}{path}" + (f"?{query_str}" if query_str else "")
+        with urllib.request.urlopen(url, timeout=3) as response:
+            return json.load(response)
+
+    def test_facets_returns_modalities_and_available_groups(self) -> None:
+        data = self.get_json("/api/facets")
+        self.assertIn("ACADEMIA", data["areas"])
+        self.assertIn("FUNCIONAL", data["areas"])
+        self.assertIn("groups", data)
+        group_ids = [g["id"] for g in data["groups"]]
+        self.assertIn("costas", group_ids)
+        self.assertIn("peito", group_ids)
+        self.assertIn("perna", group_ids)
+        self.assertIn("cardio", group_ids)
+        self.assertIn("trx", group_ids)
+
+    def test_facets_by_area_filters_groups(self) -> None:
+        acad = self.get_json("/api/facets", area="ACADEMIA")
+        acad_group_ids = [g["id"] for g in acad["groups"]]
+        self.assertIn("costas", acad_group_ids)
+        self.assertIn("perna", acad_group_ids)
+        self.assertNotIn("trx", acad_group_ids)
+
+        func = self.get_json("/api/facets", area="FUNCIONAL")
+        func_group_ids = [g["id"] for g in func["groups"]]
+        self.assertIn("trx", func_group_ids)
+        self.assertIn("costas", func_group_ids)
+        self.assertNotIn("biceps", func_group_ids)
+
+    def test_filter_by_group_finds_all_matching_exercises(self) -> None:
+        all_costas = self.get_json("/api/library", category="costas")
+        self.assertEqual(all_costas["total"], 3)
+        names = {item["original_name"] for item in all_costas["items"]}
+        self.assertIn("Barbell Row", names)
+        self.assertIn("Dumbbell Row", names)
+        self.assertIn("Inverted Row", names)
+
+    def test_filter_by_group_and_area_narrows_scope(self) -> None:
+        acad_costas = self.get_json("/api/library", area="ACADEMIA", category="costas")
+        self.assertEqual(acad_costas["total"], 2)
+
+        func_costas = self.get_json("/api/library", area="FUNCIONAL", category="costas")
+        self.assertEqual(func_costas["total"], 1)
+        self.assertEqual(func_costas["items"][0]["original_name"], "Inverted Row")
+
+    def test_filter_combining_modality_group_and_text_search(self) -> None:
+        result = self.get_json("/api/library", area="ACADEMIA", category="costas", search="Dumbbell")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["original_name"], "Dumbbell Row")
+
+    def test_raw_functional_tool_category(self) -> None:
+        trx = self.get_json("/api/library", category="trx")
+        self.assertEqual(trx["total"], 1)
+        self.assertEqual(trx["items"][0]["original_name"], "TRX Chest Press")
+
+    def test_nonexistent_category_returns_zero_results(self) -> None:
+        result = self.get_json("/api/library", category="inexistente")
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["items"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
